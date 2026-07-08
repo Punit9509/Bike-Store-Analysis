@@ -1,0 +1,323 @@
+--List all customers who have placed at least one order.
+SELECT 
+C.customer_id,
+CONCAT(C.first_name,' ', C.Last_name) AS Customer_name,
+COUNT(O.order_status) Numberoforderplacedbycustomer
+FROM dbo.Customers AS C
+JOIN dbo.orders AS O 
+ON C.customer_id = O.customer_id
+GROUP BY 
+C.customer_id,
+CONCAT(C.first_name,' ', C.Last_name)
+ORDER BY C.customer_id ASC;
+
+--Display all products with their brand and category.
+SELECT DISTINCT
+P.Product_name,
+B.Brand_name,
+C.Category_name
+FROM dbo.products AS P
+JOIN dbo.brands AS B
+ON P.brand_id = B.brand_id
+JOIN dbo.categories AS C
+ON P.category_id = C.category_id;
+
+--Find the top 10 most expensive products.
+SELECT TOP 10
+Product_name,
+CAST(list_price AS DECIMAL (12,2)) AS Product_price
+FROM dbo.products
+ORDER BY list_price DESC;
+
+--List all unique customer cities.
+SELECT 
+City,
+COUNT(customer_id) Numberofcustomers
+FROM DBO.customers
+GROUP BY City;
+
+--Count the total number of orders.
+SELECT 
+COUNT(DISTINCT order_id) NumberOforders
+FROM dbo.orders;
+
+--Show every order with the customer's full name.
+SELECT 
+CONCAT(C.first_name,' ', C.last_name) Customerfullname,
+O.order_id,
+O.order_status,
+O.required_date,
+O.order_date,
+O.shipped_date
+FROM dbo.customers AS C
+JOIN orders AS O
+ON C.customer_id = O.customer_id;
+
+--Display every product with its brand name.
+SELECT
+P.product_name,
+B.brand_name
+FROM dbo.products AS P
+JOIN dbo.brands AS B
+ON P.brand_id = B.brand_id;
+
+--Display every product with its category name.
+SELECT 
+P.product_name,
+C.category_name
+FROM dbo.products AS P
+JOIN dbo.categories AS C
+ON P.category_id = C.category_id;
+
+--Find the total orders handled by each staff member.
+SELECT 
+S.Staff_id,
+CONCAT(S.first_name, ' ', S.Last_name) StaffName,
+SUM(O.order_id) Totalorders
+FROM dbo.staffs AS S
+JOIN dbo.orders AS O
+ON S.staff_id = o.staff_id
+GROUP BY 
+S.Staff_id,
+S.first_name,
+S.last_name
+ORDER BY Totalorders DESC
+
+--Calculate total revenue by store.
+SELECT 
+S.Store_id,
+S.store_name,
+S.city,
+SUM(O.order_id) Totalorders
+FROM dbo.stores AS S
+JOIN dbo.orders AS O
+ON S.store_id = O.store_id
+GROUP BY 
+S.Store_id,
+S.store_name,
+S.city
+ORDER BY Totalorders DESC;
+
+--Calculate revenue, quantity sold and average selling price by brand
+SELECT * FROM order_items
+SELECT 
+B.brand_name,
+CAST(SUM(OI.quantity * OI.list_price) AS DECIMAL (12,2)) AS Totalrevenue,
+CAST(SUM((OI.list_price * OI.quantity) - (1 - OI.discount)) AS DECIMAL (12,2)) Revenueafterdiscount,
+CAST(AVG(OI.list_price) AS DECIMAL (12,2)) Avgsellingprice
+FROM dbo.products AS P
+JOIN dbo.brands AS B
+ON P.brand_id = B.brand_id
+JOIN order_items AS OI
+ON P.Product_id = OI.product_id
+GROUP BY 
+B.brand_name;
+
+--Find the top 5 customers based on number of orders.
+SELECT * FROM dbo.customers
+SELECT * FROM dbo.orders
+SELECT
+C.customer_id,
+CONCAT(C.first_name,' ',C.last_name) Customername,
+COUNT(order_id) Numberoforders
+FROM dbo.customers AS C
+JOIN dbo.orders AS O
+ON C.customer_id = O.customer_id
+GROUP BY 
+C.customer_id,
+C.first_name,
+C.last_name;
+
+--Calculate monthly revenue--
+SELECT 
+DATEPART(MONTH, O.order_date) AS Months,
+DATENAME(Month, O.order_date) AS Month_name,
+CAST(SUM(OI.quantity * OI.list_price) AS DECIMAL (12,2)) AS Totalrevenue,
+CAST(SUM((OI.quantity * OI.list_price) - (1-OI.discount)) AS DECIMAL (12,2)) Revenueafterdiscount
+FROM dbo.orders AS O
+JOIN dbo.order_items AS OI
+ON O.order_id = OI.order_id
+GROUP BY DATEPART(MONTH, O.order_date), DATENAME(Month, O.order_date)
+Order BY Months ASC;
+
+--Calculate yearly revenue.
+SELECT 
+DATEPART(Year, o.order_date) AS OrderYear,
+CAST(SUM((OI.quantity * OI.list_price) - (1-OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.orders AS O
+JOIN dbo.order_items AS OI
+ON O.order_id = OI.order_id
+GROUP BY DATEPART(Year, o.order_date);
+
+--Find the busiest month based on number of orders.
+SELECT TOP 1
+DATEPART(Month, order_date) AS Months,
+DATENAME(Month, order_date) AS Month_name,
+COUNT(order_id) Numberoforders
+FROM dbo.orders 
+GROUP BY 
+DATEPART(Month, order_date),
+DATENAME(Month, order_date)
+ORDER BY Numberoforders DESC;
+
+--Rank products based on total revenue.
+WITH CTE_TotalRevenue AS 
+(
+SELECT 
+P.product_name,
+CAST(SUM((OI.quantity * OI.list_price) - (1-OI.discount)) AS DECIMAL (12,2)) TotalRevenue
+FROM dbo.products AS P
+JOIN dbo.order_items AS OI
+ON P.product_id = OI.product_id
+GROUP BY P.product_name
+)
+SELECT 
+Product_name,
+TotalRevenue,
+DENSE_RANK() OVER(ORDER BY TotalRevenue DESC) AS RankRevenue
+FROM CTE_TotalRevenue;
+
+--Rank customers based on total spending.
+WITH CTE_Totalspendings AS
+(
+SELECT 
+C.Customer_id,
+CONCAT(C.first_name,' ',C.last_name) Customername,
+CAST(SUM((OI.quantity * OI.list_price) - (1 - OI.discount)) AS DECIMAL (12,2)) TotalSpendings
+FROM customers AS C
+JOIN orders AS O
+ON C.customer_id = O.customer_id
+JOIN order_items AS OI
+ON O.order_id = OI.order_id
+GROUP BY C.customer_id,c.first_name, c.last_name
+)
+SELECT 
+Customer_id,
+Customername,
+Totalspendings,
+DENSE_RANK() OVER(ORDER BY Totalspendings DESC) Rankcustomers
+FROM CTE_Totalspendings;
+
+--Calculate month-over-month revenue growth.
+WITH CTE_Revenue AS
+(
+SELECT 
+DATEPART(YEAR, O.order_date) AS Saleyear,
+DATEPART(MONTH, O.order_date) AS Month_number,
+DATENAME(MONTH, O.order_date) AS Month_name,
+CAST(SUM((OI.quantity * OI.list_price) * (1 - OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.orders AS O
+JOIN dbo.order_items AS OI
+ON O.order_id = OI.order_id
+GROUP BY 
+DATEPART(YEAR, O.order_date),
+DATEPART(MONTH, O.order_date),
+DATENAME(MONTH, O.order_date)
+)
+SELECT 
+Saleyear,
+Month_number,
+Month_name,
+Revenue,
+LAG(Revenue) OVER(PARTITION BY saleyear ORDER BY Month_number ASC) AS Previousmonthrevenue,
+Revenue - LAG(Revenue) OVER(PARTITION BY Saleyear ORDER BY Month_number ASC) AS MOMRevenuegrowth
+FROM CTE_Revenue;
+
+--Find products priced above the average list price.
+SELECT 
+Product_name,
+CAST(List_price AS DECIMAL (12,2)) AS Product_price
+FROM dbo.products
+WHERE list_price > (SELECT AVG(list_price) AS Product_price FROM dbo.products)
+ORDER BY Product_price DESC;
+
+--Find repeat customers using a CTE.
+With CTE_Numberoforders AS
+(
+SELECT 
+C.customer_id,
+CONCAT(C.first_name,' ', C.last_name) CustomerName,
+COUNT(O.customer_id) Numberoforders
+FROM dbo.customers AS C
+JOIN orders AS O
+ON C.customer_id = O.customer_id
+GROUP BY
+C.customer_id,
+C.first_name,
+C.last_name
+)
+SELECT
+Customer_id,
+Customername,
+Numberoforders
+FROM CTE_Numberoforders
+WHERE Numberoforders > 1;
+
+--Calculate Average Order Value (AOV) by store.
+SELECT
+SUM(DISTINCT order_id) Totalorders,
+SUM(list_price) Totalrevenue,
+CAST((SUM(list_price)/SUM(order_id)) AS DECIMAL (12,2)) AverageOrderValue
+FROM order_items
+
+--Calculate Gross Revenue and Net Revenue for each store.--
+SELECT 
+S.store_id,
+S.store_name,
+CAST(SUM(OI.quantity * OI.list_price) AS DECIMAL (12,2)) NetRevenue,
+CAST(SUM((OI.quantity * OI.list_price) * ( 1-discount)) AS DECIMAL (12,2)) AS GrossRevenue
+FROM dbo.stores AS S
+JOIN dbo.orders AS O
+ON S.store_id = O.store_id
+JOIN order_items AS OI
+ON O.order_id = OI.order_id
+GROUP BY 
+S.store_id,
+S.store_name;
+
+--Create an executive sales summary showing revenue by year, store, brand and category with appropriate KPIs.
+SELECT
+B.brand_name,
+C.category_name,
+S.Store_name,
+DATEPART(YEAR, O.order_date) AS Saleyear,
+CAST(SUM((OI.quantity * OI.list_price) - (1 - OI.discount)) AS DECIMAL (12,2)) AS Revenue,
+COUNT(OI.quantity) Totalunitssold,
+SUM(OI.quantity * OI.list_price) / SUM(quantity) AS AOV
+FROM dbo.orders AS O
+JOIN order_items AS OI
+ON O.order_id = OI.order_id
+JOIN dbo.stores AS S
+ON S.store_id = O.store_id
+JOIN dbo.products AS P
+ON P.product_id = OI.product_id
+JOIN dbo.brands AS B
+ON P.brand_id = B.brand_id
+JOIN dbo.categories AS C
+ON P.category_id = C.category_id
+GROUP BY
+B.brand_name,
+C.category_name,
+S.store_name,
+DATEPART(YEAR, O.order_date)
+ORDER BY Saleyear ASC
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
