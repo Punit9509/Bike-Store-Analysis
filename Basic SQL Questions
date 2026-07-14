@@ -302,6 +302,463 @@ S.store_name,
 DATEPART(YEAR, O.order_date)
 ORDER BY Saleyear ASC
 
+--Find the top 5 customers by total revenue.
+SELECT TOP 5
+C.Customer_id,
+CONCAT(C.first_name, ' ', C.last_name) Customername,
+CAST(SUM((OI.quantity * OI.list_price) * (1- OI.discount)) AS DECIMAL (12,2)) TotalRevenue
+FROM dbo.customers AS C
+JOIN dbo.orders AS O
+ON C.customer_id = O.customer_id
+JOIN dbo.order_items AS OI
+ON O.order_id = OI.order_id
+GROUP BY 
+C.customer_id,
+C.first_name,
+C.last_name
+ORDER BY TotalRevenue DESC;
+
+--Calculate total discount amount by brand.
+SELECT 
+B.brand_name,
+CAST(SUM(OI.discount) as DECIMAL (12,2)) Discountbybrand
+FROM dbo.order_items AS OI
+JOIN dbo.products AS P
+ON OI.Product_id = P.Product_id
+JOIN dbo.brands AS B
+ON B.brand_id = P.brand_id
+GROUP BY B.brand_name
+ORDER BY Discountbybrand DESC;
+
+--Find products that have never been sold.
+SELECT 
+P.Product_name,
+OI.order_id
+FROM dbo.products AS P
+LEFT JOIN dbo.order_items AS OI
+ON P.product_id = OI.product_id
+WHERE OI.order_id IS NULL;
+
+--Calculate daily revenue.
+SELECT 
+O.order_date,
+DATENAME(WEEKDAY, O.order_date) Day_name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1 - OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.orders AS O
+JOIN dbo.order_items AS OI
+ON O.order_id = OI.order_id
+GROUP BY 
+O.order_date,
+DATEPART(DAY, O.order_date)
+ORDER BY O.order_date ASC;
+
+--Calculate total stock available by category.
+SELECT
+C.Category_name,
+SUM(S.quantity) Totalquantity
+FROM dbo.categories AS C
+JOIN dbo.products AS P
+ON C.category_id = P.category_id
+JOIN dbo.stocks AS S
+ON S.product_id = P.product_id
+GROUP BY C.category_name;
+
+--Show revenue, units sold, average selling price and order count by category.
+SELECT 
+C.Category_name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1 - OI.discount)) AS DECIMAL (12,2)) Revenue,
+SUM(OI.quantity) TotalUnitSold,
+COUNT(DISTINCT OI.order_id) TotalOrdercount,
+CAST(SUM((OI.quantity * OI.list_price) * (1-OI.discount))/SUM(OI.quantity) AS DECIMAL (12,2)) AverageSellingPrice
+FROM dbo.categories AS C
+JOIN dbo.products AS P
+ON C.category_id = P.category_id
+JOIN dbo.order_items AS OI
+ON P.product_id = OI.product_id
+GROUP BY C.Category_name;
+
+--Rank stores by total revenue.
+WITH CTE_Rankstores AS
+(
+SELECT 
+S.store_name,
+CAST(SUM((OI.quantity * OI.list_price) * (1 - OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.stores AS S
+JOIN dbo.orders AS O
+ON S.store_id = O.store_id
+JOIN dbo.order_items AS OI
+ON O.order_id = OI.order_id
+GROUP BY S.store_name
+)
+SELECT 
+Store_name,
+Revenue,
+DENSE_RANK() OVER(ORDER BY Revenue DESC) Rank_store
+FROM  CTE_Rankstores;
+
+--Find the top 3 products in each category by revenue.
+WITH CTE_Revenue AS
+(
+SELECT
+P.Product_name,
+C.Category_name,
+CAST(SUM((OI.quantity * OI.list_price) * (1 - OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.Products AS P
+JOIN dbo.Categories AS C
+ON P.category_id = C.Category_id
+JOIN dbo.order_items AS OI
+ON P.product_id = OI.product_id
+GROUP BY 
+P.Product_name,
+C.Category_name
+),
+CTE_RankProduct AS
+(
+SELECT 
+Category_name,
+Product_name,
+Revenue,
+DENSE_RANK() OVER(PARTITION BY Category_name ORDER BY Revenue DESC) Rank_Product
+FROM CTE_Revenue
+)
+SELECT
+Category_name,
+Product_name,
+Revenue
+FROM CTE_RankProduct
+WHERE Rank_Product IN (1,2,3);
+
+--Calculate month-over-month revenue growth percentage.--
+WITH CTE_TotalRevenue AS
+(
+SELECT
+DATEPART(YEAR, O.order_date) SaleYear,
+DATEPART(MONTH, O.order_date) Month_number,
+DATENAME(MONTH, O.order_date) Month_name,
+SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) CurrentRevenue
+FROM dbo.orders AS O
+JOIN dbo.order_items AS OI
+ON O.order_id = OI.order_id
+GROUP BY 
+DATEPART(YEAR, O.order_date),
+DATEPART(MONTH, O.order_date),
+DATENAME(MONTH, O.order_date)
+)
+SELECT 
+SaleYear,
+Month_number,
+Month_name,
+CAST(CurrentRevenue AS DECIMAL (12,2)) CurrentRevenue,
+CAST(LAG(CurrentRevenue) OVER(ORDER BY SaleYear, Month_number ASC) AS DECIMAL (12,2)) Previousmonth,
+CONCAT(CAST((CurrentRevenue - LAG(CurrentRevenue) OVER(ORDER BY SaleYear, Month_number ASC)) / 
+LAG(CurrentRevenue) OVER(ORDER BY SaleYear, Month_number ASC) * 100 AS DECIMAL (12,2)), '%') AS MOMgrowthpercentage
+FROM CTE_TotalRevenue;
+
+--Find customers whose spending is above the overall average.--
+WITH CTE_Customerspending AS 
+(
+SELECT 
+C.customer_id,
+CONCAT(C.first_name,' ', C.last_name) Customername,
+SUM((OI.quantity * OI.list_price) * (1-OI.discount)) CustomerSpendings
+FROM dbo.customers AS C
+JOIN dbo.orders AS O
+ON C.customer_id = O.customer_id
+JOIN dbo.order_items AS OI
+ON OI.order_id = O.order_id
+GROUP BY
+C.customer_id,
+C.first_name,
+C.last_name
+),
+CTE_Avgspending AS
+(
+SELECT 
+Customer_id,
+customername,
+Customerspendings,
+AVG(Customerspendings) OVER () Avgspendings
+FROM CTE_Customerspending
+)
+SELECT
+Customer_id,
+customername,
+customerspendings,
+Avgspendings
+FROM CTE_Avgspending
+WHERE customerspendings > Avgspendings;
+
+--Find brands with revenue above the average brand revenue.
+WITH CTE_BrandRevenue AS
+(
+SELECT 
+B.brand_name,
+SUM((OI.quantity * OI.list_price) * (1-OI.discount)) BrandRevenue
+FROM dbo.brands AS B
+JOIN dbo.products AS P
+ON B.brand_id = P.brand_id
+JOIN dbo.order_items AS OI
+ON OI.product_id = P.product_id
+GROUP BY B.brand_name
+),
+CTE_AvgbrandRevenue AS
+(
+SELECT 
+brand_name,
+BrandRevenue,
+AVG(BrandRevenue) OVER() AveragebrandRevenue
+FROM CTE_BrandRevenue
+)
+SELECT 
+Brand_name,
+BrandRevenue,
+AveragebrandRevenue
+FROM CTE_AvgbrandRevenue
+WHERE BrandRevenue > AveragebrandRevenue;
+
+--Calculate inventory value by store.--
+SELECT 
+S.store_name,
+P.product_name,
+SUM(St.quantity) AS InventoryValue
+FROM Stores AS S
+JOIN Stocks AS St
+ON S.store_id = St.store_id
+JOIN Products AS P
+ON St.product_id = P.product_id
+GROUP BY 
+S.store_name,
+P.product_name
+ORDER BY InventoryValue DESC;
+
+--Find the busiest day of the week by orders.--
+SELECT TOP 1
+DATEPART(WEEKDAY, order_date) AS Day_number,
+DATENAME(WEEKDAY, order_date) AS Day_name,
+COUNT(order_id) Numberoforders
+FROM dbo.orders
+GROUP BY 
+DATEPART(WEEKDAY, order_date),
+DATENAME(WEEKDAY, order_date)
+ORDER BY Numberoforders DESC;
+
+--Calculate cumulative revenue by month.--
+WITH CTE_TotalRevenue AS
+(
+SELECT 
+DATEPART(YEAR, O.order_date) SaleYear,
+DATEPART(MONTH, O.order_date) Month_number,
+DATENAME(MONTH, O.order_date) Month_name,
+CAST(SUM((OI.quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.orders AS O
+JOIN dbo.order_items AS OI
+ON O.order_id = OI.order_id
+GROUP BY 
+DATEPART(YEAR, O.order_date),
+DATEPART(MONTH, O.order_date),
+DATENAME(MONTH, O.order_date)
+)
+SELECT 
+Saleyear,
+Month_number,
+Month_name,
+Revenue,
+SUM(Revenue) OVER(ORDER BY Saleyear, Month_number ASC) CumulativeRevenue
+FROM CTE_TotalRevenue
+ORDER BY saleyear, Month_number ASC;
+
+--Calculate repeat purchase rate.
+WITH CTE_Totaluniquecustomers AS
+(
+SELECT DISTINCT Customer_id FROM dbo.orders
+), 
+CTE_Repeatcustomers AS
+(
+SELECT 
+Customer_id,
+COUNT(order_id) Countrepeat
+FROM dbo.orders
+GROUP BY Customer_id
+HAVING COUNT(order_id) >= 2
+)
+SELECT 
+(SELECT COUNT(*) FROM CTE_Repeatcustomers) AS Repeatcustomers,
+(SELECT COUNT(*) FROM CTE_Totaluniquecustomers) AS Uniquecustomers,
+((SELECT COUNT(*) FROM CTE_Repeatcustomers)* 100/(SELECT COUNT(*) FROM CTE_Totaluniquecustomers))
+AS Repeatpurchaserate;
+
+--Calculate revenue contribution percentage by brand.
+WITH CTE_TotalRevenue AS 
+(
+SELECT 
+B.brand_name,
+CAST(SUM((OI.quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) TotalRevenue
+FROM dbo.brands AS B
+JOIN dbo.products AS P
+ON b.brand_id = P.brand_id
+JOIN dbo.order_items AS OI
+ON P.product_id = OI.product_id
+GROUP BY B.brand_name
+)
+SELECT 
+Brand_name,
+TotalRevenue,
+SUM(TotalRevenue) OVER() Grandtotal,
+SUM(TotalRevenue) OVER(ORDER BY TotalRevenue DESC) CumulativeRevenue,
+CAST(SUM(TotalRevenue) OVER(ORDER BY TotalRevenue DESC) * 100.0/SUM(TotalRevenue) OVER() AS DECIMAL (12,2)) AS Cumulativepercentage
+FROM CTE_TotalRevenue;
+
+--Find slow-moving products based on sales quantity.
+SELECT 
+Product_id,
+SUM(quantity) Totalquantity
+FROM dbo.order_items
+GROUP BY Product_id
+HAVING SUM(quantity) < 5
+ORDER BY Totalquantity ASC;
+
+--Segment customers into quartiles by spending.
+WITH CTE_Spendings AS
+(
+SELECT 
+CONCAT(C.first_name, ' ', C.last_name) CustomerName,
+CAST(SUM((OI.quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Customerspending
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.customers AS C
+ON C.customer_id = O.customer_id
+GROUP BY
+C.first_name,
+C.last_name
+), 
+CTE_Buckets AS
+(
+SELECT 
+CustomerName,
+Customerspending,
+NTILE(3) OVER(ORDER BY Customerspending DESC) Buckets
+FROM CTE_Spendings
+)
+SELECT 
+CustomerName,
+Customerspending,
+CASE 
+    WHEN Buckets = 1 THEN 'Highspend'
+    WHEN Buckets = 2 THEN 'Averagespend'
+    ELSE 'LowSpend'
+END Segmentation
+FROM CTE_Buckets;
+
+--Calculate revenue contribution percentage by brand.--
+WITH CTE_BrandRevenue AS 
+(
+SELECT 
+b.brand_name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenuebybrand
+FROM dbo.order_items AS OI
+JOIN dbo.products AS P
+ON OI.product_id = P.product_id
+JOIN dbo.brands AS B
+ON B.brand_id = P.brand_id
+GROUP BY B.brand_name
+)
+SELECT 
+Brand_name,
+Revenuebybrand,
+SUM(Revenuebybrand) OVER() TotalRevenue,
+CAST(Revenuebybrand * 100/SUM(Revenuebybrand) OVER() AS DECIMAL (12,2)) AS ContributionPercentage
+FROM CTE_BrandRevenue;
+
+--Find slow-moving products based on sales quantity.
+SELECT 
+Product_id,
+SUM(quantity) Totalquantity
+FROM dbo.order_items
+GROUP BY Product_id
+HAVING SUM(quantity) < 5
+ORDER BY Totalquantity ASC;
+
+--Create a yearly sales leaderboard for stores.--
+WITH CTE_saless AS
+(
+SELECT 
+DATEPART(YEAR, O.order_date) AS Salesyear,
+S.store_name,
+CAST(SUM(OI.Quantity * OI.list_price) AS DECIMAL (12,2))TotalSales
+FROM dbo.orders AS O
+JOIN dbo.order_items AS OI 
+ON O.order_id = OI.order_id
+JOIN dbo.stores AS S
+ON O.store_id = S.store_id
+GROUP BY 
+DATEPART(YEAR, O.order_date),
+S.store_name
+)
+SELECT 
+Store_Name,
+SalesYear,
+Totalsales,
+DENSE_RANK() OVER(PARTITION BY Salesyear ORDER BY Totalsales DESC) sales
+FROM CTE_saless;
+
+--Prepare a brand performance report with revenue, units, AOV and ranking.
+WITH CTE_brandsummary AS
+(
+SELECT 
+B.brand_name,
+CAST(SUM((OI.quantity * OI.list_price) * (1 - OI.discount)) AS DECIMAL (12,2)) Revenue,
+SUM(OI.quantity) Totalunits,
+CAST(SUM((OI.quantity * OI.list_price) * (1 - OI.discount))/SUM(OI.quantity) AS DECIMAL (12,2)) AS AOV
+FROM dbo.order_items AS OI
+JOIN dbo.products AS P
+ON OI.product_id = P.product_id
+JOIN dbo.brands AS B
+ON P.brand_id = B.brand_id
+GROUP BY B.brand_name
+)
+SELECT
+Brand_Name,
+Revenue,
+Totalunits,
+AOV,
+DENSE_RANK() OVER(ORDER BY Revenue DESC) Revenuewiseranking
+FROM CTE_brandsummary;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
