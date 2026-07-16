@@ -1,0 +1,188 @@
+--Calculate year-over-year revenue growth by store.
+WITH CTE_Revenue AS
+(
+SELECT 
+S.store_name,
+DATEPART(YEAR, O.Order_date) AS SaleYear,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.Order_id
+JOIN dbo.stores AS S
+ON S.store_id = O.store_id
+GROUP BY S.store_name,
+DATEPART(YEAR, O.Order_date)
+)
+SELECT 
+Store_name,
+SaleYear,
+Revenue AS CurrentMonthRevenue,
+LAG(Revenue) OVER(PARTITION BY Store_name ORDER BY SaleYear ASC) PreviousYearrevenue,
+CONCAT(CAST((Revenue - LAG(Revenue) OVER(PARTITION BY Store_name ORDER BY SaleYear ASC))/
+NULLIF(LAG(Revenue) OVER(PARTITION BY Store_name ORDER BY SaleYear ASC),0)* 100 AS DECIMAL (12,2)), '%') AS YOYRevenueGrowth
+FROM CTE_Revenue;
+
+--Find the top-selling product in each store by units sold.
+WITH CTE_Units AS
+(
+SELECT 
+S.Store_name,
+P.Product_name,
+SUM(OI.Quantity) TotalUnitssold
+FROM dbo.products AS P
+JOIN dbo.order_items AS OI
+ON P.product_id = OI.product_id
+JOIN dbo.orders AS O
+ON O.order_id = OI.order_id
+JOIN dbo.stores AS S
+ON S.store_id = O.store_id
+GROUP BY 
+S.Store_name,
+P.Product_name
+),
+CTE_QuantityRanking AS
+(
+SELECT 
+Store_name,
+Product_name,
+Totalunitssold,
+DENSE_RANK() OVER(PARTITION BY Store_name ORDER BY Totalunitssold DESC) Ranking
+FROM CTE_units
+)
+SELECT 
+Store_name,
+Product_name,
+Totalunitssold
+FROM CTE_QuantityRanking
+WHERE Ranking = 1;
+
+--Calculate Customer Lifetime Value (CLV) using total revenue.
+SELECT 
+CONCAT(C.first_name, ' ',C.last_name) Customer_name,
+SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) TotalRevenue,
+SUM(OI.Quantity) TotalUnitsPurchased,
+COUNT(OI.order_id) Numberoforderplaced,
+MIN(O.order_date) Firstorderdate,
+MAX(O.order_date) Lastorderplaced
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.customers AS C
+ON O.customer_id = C.customer_id
+GROUP BY
+C.first_name,
+C.last_name;
+
+	--Calculate a 3-month moving average of monthly revenue.
+	WITH CTE_Revenue AS 
+	(
+	SELECT 
+	DATEPART(YEAR, O.order_date) SaleYear,
+	DATEPART(Month, O.order_date) Month_number,
+	DATENAME(Month, O.order_date) Month_name,
+	SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) Revenue
+	FROM dbo.orders AS O
+	JOIN dbo.order_items AS OI
+	ON O.order_id = OI.order_id
+	GROUP BY 
+	DATEPART(YEAR, O.order_date),
+	DATEPART(Month, O.order_date),
+	DATENAME(Month, O.order_date)
+	)
+	SELECT 
+	SaleYear,
+	Month_number,
+	Month_name,
+	Revenue,
+	AVG(Revenue) OVER(PARTITION BY SaleYear ORDER BY Month_number ASC ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) MovingAvg
+	FROM CTE_Revenue;
+
+--Rank customers within each city based on total spending.
+WITH CTE_Customerspendings AS
+(
+SELECT 
+C.customer_id,
+CONCAT(C.first_name,' ', C.last_name) Customer_name,
+C.City,
+CAST(SUM((OI.Quantity * OI.list_price) * (1- OI.discount)) AS DECIMAL (12,2)) CustomerSpending
+FROM dbo.customers AS C
+JOIN dbo.orders AS O
+ON C.customer_id = O.customer_id
+JOIN dbo.order_items AS OI
+ON OI.order_id = O.order_id
+GROUP BY 
+C.customer_id,
+C.first_name,
+C.last_name,
+C.city
+)
+SELECT 
+City,
+Customer_name,
+Customerspending,
+DENSE_RANK() OVER(PARTITION BY CITY ORDER BY Customerspending DESC) Ranking
+FROM CTE_Customerspendings;
+
+--Create a store performance report showing Revenue, Orders, Units Sold, ASP, AOV and Revenue Contribution %.
+
+WITH CTE_StoreKPI AS
+(
+SELECT 
+S.Store_id,
+S.Store_name,
+CAST(SUM((OI.Quantity * OI.list_price) * ( 1 - OI.discount)) AS DECIMAL (12,2)) Revenue,
+SUM(OI.Quantity) TotalUnitsSold,
+COUNT(DISTINCT OI.order_id) NumberOforders
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.stores AS S
+ON S.store_id = O.store_id
+GROUP BY 
+S.store_id,
+S.store_name
+)
+SELECT 
+Store_name,
+Revenue,
+TotalUnitssold,
+NumberOforders,
+SUM(Revenue) OVER() OverallRevenue,
+CAST(Revenue / Totalunitssold AS DECIMAL (12,2)) AS ASP,
+CAST(Revenue / Numberoforders AS DECIMAL (12,2)) AS AOV,
+CAST((Revenue/SUM(Revenue) OVER())*100 AS DECIMAL (12,2)) AS RevenueContribution
+FROM CTE_StoreKPI;
+
+--Identify the products contributing to the first 80% of total revenue.
+WITH CTE_RevenuebyProducts AS
+(
+SELECT 
+P.Product_name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) AS Revenue
+FROM dbo.products AS P
+JOIN dbo.order_items AS OI
+ON P.Product_id = OI.Product_id
+GROUP BY P.Product_name
+),
+CTE_CumulativePercentage AS
+(
+SELECT 
+Product_name,
+Revenue,
+SUM(Revenue) OVER(ORDER BY Revenue DESC) CumulativeTotal,
+SUM(Revenue) OVER() OverallRevenue,
+CAST(SUM(Revenue) OVER(ORDER BY Revenue DESC)/ SUM(Revenue) OVER() * 100 AS DECIMAL (12,2)) CumulativePercentage
+FROM CTE_Revenuebyproducts
+)
+SELECT 
+Product_name,
+Revenue,
+CumulativeTotal,
+CumulativePercentage
+FROM CTE_CumulativePercentage
+WHERE CumulativePercentage <= 80
+
+
+
+
+
