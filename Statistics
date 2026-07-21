@@ -182,6 +182,1044 @@ CumulativePercentage
 FROM CTE_CumulativePercentage
 WHERE CumulativePercentage <= 80
 
+--Prepare a regional sales dashboard showing Year, Region, Store, Revenue, Orders, Customers and Top Brand.
+WITH CTE_RegionalDashboard AS
+(
+SELECT
+DATEPART(YEAR, O.order_date) SaleYear,
+C.State,
+S.Store_name,
+B.Brand_name,
+COUNT(DISTINCT C.customer_id) NumberOfcustomers,
+COUNT(DISTINCT OI.Order_id) NumberOforders,
+SUM(OI.Quantity) NumberOfproductsSold,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.customers AS C
+ON O.customer_id = C.customer_id
+JOIN dbo.stores AS S
+ON O.store_id = S.store_id
+JOIN dbo.products AS P
+ON P.product_id = OI.product_id
+JOIN dbo.brands AS B
+ON P.brand_id = B.Brand_id
+GROUP BY 
+DATEPART(YEAR, O.order_date),
+C.State,
+S.Store_name,
+B.Brand_name
+),
+CTE_Ranking AS
+(
+SELECT 
+State AS Region,
+SaleYear,
+Store_name,
+Brand_name,
+NumberOfcustomers,
+Revenue,
+NumberOfOrders,
+NumberOfProductsSold,
+DENSE_RANK() OVER(PARTITION BY SaleYear, State, Store_name ORDER BY Revenue DESC) Ranking
+FROM CTE_RegionalDashboard
+)
+SELECT 
+Region,
+SaleYear,
+Store_name,
+Brand_name,
+NumberOfcustomers,
+Revenue,
+NumberOfOrders,
+NumberOfProductsSold
+FROM CTE_Ranking
+WHERE Ranking = 1;
+
+--Find the top 5 customers by Revenue.
+SELECT TOP 5
+C.Customer_id,
+CONCAT(C.first_name,' ', C.last_name) Customer_Name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.customers AS C
+ON O.customer_id = C.customer_id
+GROUP BY
+C.customer_id,
+C.first_name,
+C.last_name
+ORDER BY Revenue DESC;
+
+----Find the top 5 customers by Revenue contribution % and rank them highest to lowest--
+WITH CTE_Revenuebycustomer AS 
+(
+SELECT 
+C.customer_id,
+CONCAT(C.first_name,' ', C.last_name) Customer_Name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.customers AS C
+ON O.customer_id = C.customer_id
+GROUP BY 
+C.customer_id,
+C.first_name,
+C.last_name
+),
+CTE_RevenueContribution AS
+(
+SELECT 
+Customer_id,
+Customer_name,
+Revenue,
+SUM(Revenue) OVER() OverallRevenue,
+CAST(Revenue*100/SUM(Revenue) OVER() AS DECIMAL (12,2))AS RevenueContributionPercentage
+FROM CTE_Revenuebycustomer
+)
+SELECT TOP 5
+Customer_id,
+Customer_name,
+Revenue,
+OverallRevenue,
+CONCAT(RevenueContributionPercentage, '%') AS RevenueContributionPercentage,
+DENSE_RANK() OVER(ORDER BY RevenueContributionPercentage DESC) Ranking
+FROM CTE_RevenueContribution
+ORDER BY RevenueContributionPercentage DESC;
+
+--Show Revenue, Revenue contribution Percentage for each Store.--
+WITH CTE_RevenuebyStore AS
+(
+SELECT 
+S.store_name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1- OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.stores AS S
+ON O.store_id = S.store_id
+GROUP BY S.store_name
+)
+SELECT 
+Store_Name,
+Revenue,
+SUM(Revenue) OVER() OverallRevenue,
+CAST(Revenue * 100 / SUM(Revenue) OVER() AS DECIMAL (12,2)) AS ContributionPercentage
+FROM CTE_RevenuebyStore;
+
+--Find customers whose Average Order Value (AOV) is above the overall average AOV.
+WITH CTE_Customer_AOV AS
+(
+SELECT 
+C.customer_id,
+CONCAT(C.first_name,' ', C.last_name) Customer_name,
+COUNT(DISTINCT OI.Order_id) NumberOfordersbycus,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenue,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount))/ COUNT(DISTINCT OI.Order_id) AS DECIMAL (12,2)) Customer_AOV
+FROM dbo.Order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.Order_id
+JOIN dbo.customers AS C
+ON O.customer_id = C.customer_id
+GROUP BY
+C.customer_id,
+C.first_name,
+C.last_name
+),
+CTE_Overall_AOV AS
+(
+SELECT
+Customer_id,
+Customer_name,
+Customer_AOV,
+SUM(NumberOfordersbycus) OVER() TotalOrders,
+SUM(Revenue) OVER() AS OverallRevenue,
+CAST(SUM(Revenue) OVER() / SUM(NumberOfordersbycus) OVER() AS DECIMAL (12,2)) AS Overall_AOV
+FROM CTE_Customer_AOV
+)
+SELECT
+Customer_Name,
+Customer_AOV,
+Overall_AOV
+FROM CTE_Overall_AOV
+WHERE Customer_AOV > Overall_AOV
+ORDER BY Customer_AOV DESC;
+
+--Show the running total of Revenue for each Store by Year and Month.
+WITH CTE_RevenuebyStore AS
+(
+SELECT 
+S.store_Name,
+DATEPART(YEAR, O.order_date) SaleYear,
+DATEPART(MONTH, O.order_date) Month_number,
+DATENAME(MONTH, O.order_date) Month_Name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1 - OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.orders AS O
+JOIN dbo.order_items AS OI
+ON O.order_id = OI.order_id
+JOIN dbo.Stores AS S
+ON S.store_id = O.store_id
+GROUP BY
+S.store_Name,
+DATEPART(YEAR,O.order_date),
+DATEPART(MONTH, O.order_date),
+DATENAME(MONTH, O.order_date)
+)
+SELECT 
+Store_name,
+SaleYear,
+Month_Name,
+Revenue,
+SUM(Revenue) OVER(PARTITION BY Store_name ORDER BY Saleyear, Month_Number) RunningTotal
+FROM CTE_Revenuebystore;
+
+--Find the Top 3 Stores by Revenue Contribution (%) in each Year.
+WITH CTE_Revenuebystore AS
+(
+SELECT 
+S.store_name,
+DATEPART(YEAR, order_date) SaleYear,
+CAST(SUM((OI.Quantity * OI.list_price) * (1 - OI.discount)) AS DECIMAL (12,2)) Revenuebystore
+FROM dbo.orders AS O
+JOIN dbo.order_items AS OI
+ON O.order_id = OI.order_id
+JOIN dbo.stores AS S
+ON O.store_id = S.store_id
+GROUP BY 
+S.store_name,
+DATEPART(YEAR, order_date)
+),
+CTE_ContributionPercentage AS
+(
+SELECT
+Store_name,
+SaleYear,
+Revenuebystore,
+SUM(Revenuebystore) OVER(PARTITION BY SaleYear) OverallRevenue,
+CAST(Revenuebystore * 100 / SUM(Revenuebystore) OVER(PARTITION BY SaleYear) AS DECIMAL (12,2)) ContributionPercentage
+FROM CTE_RevenuebyStore
+),
+CTE_Ranking AS
+(
+SELECT 
+Store_name,
+SaleYear,
+Revenuebystore,
+OverallRevenue,
+ContributionPercentage,
+DENSE_RANK() OVER(PARTITION BY SaleYear ORDER BY ContributionPercentage DESC) Ranking
+FROM CTE_ContributionPercentage
+)
+SELECT 
+Store_name,
+SaleYear,
+Revenuebystore,
+OverallRevenue,
+ContributionPercentage
+FROM CTE_Ranking
+WHERE Ranking IN (1,2,3);
+
+--Calculate the Average Selling Price (ASP) for every Brand and compare it with the overall company ASP.
+WITH CTE_BrandASP AS
+(
+SELECT 
+B.brand_name,
+CAST(SUM((OI.quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) RevenueBybrand,
+SUM(OI.Quantity) AS TotalQuantitySold,
+CAST(SUM((OI.quantity * OI.list_price) * (1-OI.discount)) / SUM(OI.Quantity) AS DECIMAL (12,2)) ASPbyBrand
+FROM dbo.order_items AS OI
+JOIN dbo.products AS P
+ON OI.product_id = P.product_id
+JOIN dbo.brands AS B
+ON B.brand_id = P.brand_id
+GROUP BY 
+B.brand_name
+),
+CTE_OverallCompany_ASP AS
+(
+SELECT 
+Brand_name,
+ASPbyBrand,
+SUM(RevenueBybrand) OVER() OverallRevenue,
+SUM(TotalQuantitySold) OVER() Overallquantity,
+CAST(SUM(RevenueBybrand) OVER() / SUM(TotalQuantitySold) OVER() AS DECIMAL (12,2)) AS OverallCompanyASP
+FROM CTE_BrandASP 
+) 
+SELECT 
+Brand_name,
+ASPbyBrand,
+OverallCompanyASP,
+CAST(OverallCompanyASP - ASPbyBrand AS DECIMAL (12,2)) AS DifferenceinASP
+FROM CTE_OverallCompany_ASP;
+
+--Find repeat customers and calculate their Customer Lifetime Value (CLV).
+SELECT 
+O.customer_id,
+CONCAT(C.first_name,' ', C.last_name) Customer_name,
+COUNT(DISTINCT O.customer_id) NumberOforderPlaced,
+SUM(OI.Quantity) NumberOfproductPurchased,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenuebycustomers
+FROM dbo.orders AS O
+JOIN dbo.order_items AS OI
+ON O.Order_id = OI.order_id
+JOIN dbo.customers AS C
+ON O.customer_id = C.customer_id
+GROUP BY 
+O.customer_id,
+C.first_name,
+C.last_name
+HAVING COUNT(DISTINCT O.customer_id) > 1
+ORDER BY NumberOforderPlaced ASC;
+
+--Create a Customer Performance Dashboard showing Revenue, Orders, Units Purchased, AOV and CLV.
+SELECT
+C.customer_id,
+CONCAT(C.first_name,' ', C.last_name) Customer_name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1- OI.discount)) AS DECIMAL (12,2)) RevenueBycustomer,
+COUNT(DISTINCT OI.order_id) Numberoforders,
+SUM(OI.Quantity) UnitsPurchased,
+CAST(SUM((OI.Quantity * OI.list_price) * (1- OI.discount)) /COUNT(DISTINCT OI.order_id) AS DECIMAL (12,2)) AS Customer_AOV,
+MIN(O.Order_date) AS first_order,
+MAX(O.order_date) AS Last_order,
+DATEDIFF(DAY, MIN(O.Order_date), MAX(O.order_date)) Customerlifetimedays
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.customers AS C
+ON O.customer_id = C.customer_id
+GROUP BY
+C.customer_id,
+C.first_name,
+C.last_name
+
+--Prepare a regional sales dashboard showing Year, Region, Store, Revenue, Orders, Customers and Top Brand.
+WITH CTE_RegionalDashboard AS
+(
+SELECT
+DATEPART(YEAR, O.order_date) SaleYear,
+C.State,
+S.Store_name,
+B.Brand_name,
+COUNT(DISTINCT C.customer_id) NumberOfcustomers,
+COUNT(DISTINCT OI.Order_id) NumberOforders,
+SUM(OI.Quantity) NumberOfproductsSold,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.customers AS C
+ON O.customer_id = C.customer_id
+JOIN dbo.stores AS S
+ON O.store_id = S.store_id
+JOIN dbo.products AS P
+ON P.product_id = OI.product_id
+JOIN dbo.brands AS B
+ON P.brand_id = B.Brand_id
+GROUP BY 
+DATEPART(YEAR, O.order_date),
+C.State,
+S.Store_name,
+B.Brand_name
+),
+CTE_Ranking AS
+(
+SELECT 
+State AS Region,
+SaleYear,
+Store_name,
+Brand_name,
+NumberOfcustomers,
+Revenue,
+NumberOfOrders,
+NumberOfProductsSold,
+DENSE_RANK() OVER(PARTITION BY SaleYear, State, Store_name ORDER BY Revenue DESC) Ranking
+FROM CTE_RegionalDashboard
+)
+SELECT 
+Region,
+SaleYear,
+Store_name,
+Brand_name,
+NumberOfcustomers,
+Revenue,
+NumberOfOrders,
+NumberOfProductsSold
+FROM CTE_Ranking
+WHERE Ranking = 1;
+
+--Find the top 5 customers by Revenue.
+SELECT TOP 5
+C.Customer_id,
+CONCAT(C.first_name,' ', C.last_name) Customer_Name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.customers AS C
+ON O.customer_id = C.customer_id
+GROUP BY
+C.customer_id,
+C.first_name,
+C.last_name
+ORDER BY Revenue DESC;
+
+----Find the top 5 customers by Revenue contribution % and rank them highest to lowest--
+WITH CTE_Revenuebycustomer AS 
+(
+SELECT 
+C.customer_id,
+CONCAT(C.first_name,' ', C.last_name) Customer_Name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.customers AS C
+ON O.customer_id = C.customer_id
+GROUP BY 
+C.customer_id,
+C.first_name,
+C.last_name
+),
+CTE_RevenueContribution AS
+(
+SELECT 
+Customer_id,
+Customer_name,
+Revenue,
+SUM(Revenue) OVER() OverallRevenue,
+CAST(Revenue*100/SUM(Revenue) OVER() AS DECIMAL (12,2))AS RevenueContributionPercentage
+FROM CTE_Revenuebycustomer
+)
+SELECT TOP 5
+Customer_id,
+Customer_name,
+Revenue,
+OverallRevenue,
+CONCAT(RevenueContributionPercentage, '%') AS RevenueContributionPercentage,
+DENSE_RANK() OVER(ORDER BY RevenueContributionPercentage DESC) Ranking
+FROM CTE_RevenueContribution
+ORDER BY RevenueContributionPercentage DESC;
+
+--Show Revenue, Revenue contribution Percentage for each Store.--
+WITH CTE_RevenuebyStore AS
+(
+SELECT 
+S.store_name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1- OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.stores AS S
+ON O.store_id = S.store_id
+GROUP BY S.store_name
+)
+SELECT 
+Store_Name,
+Revenue,
+SUM(Revenue) OVER() OverallRevenue,
+CAST(Revenue * 100 / SUM(Revenue) OVER() AS DECIMAL (12,2)) AS ContributionPercentage
+FROM CTE_RevenuebyStore;
+
+--Find customers whose Average Order Value (AOV) is above the overall average AOV.
+WITH CTE_Customer_AOV AS
+(
+SELECT 
+C.customer_id,
+CONCAT(C.first_name,' ', C.last_name) Customer_name,
+COUNT(DISTINCT OI.Order_id) NumberOfordersbycus,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenue,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount))/ COUNT(DISTINCT OI.Order_id) AS DECIMAL (12,2)) Customer_AOV
+FROM dbo.Order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.Order_id
+JOIN dbo.customers AS C
+ON O.customer_id = C.customer_id
+GROUP BY
+C.customer_id,
+C.first_name,
+C.last_name
+),
+CTE_Overall_AOV AS
+(
+SELECT
+Customer_id,
+Customer_name,
+Customer_AOV,
+SUM(NumberOfordersbycus) OVER() TotalOrders,
+SUM(Revenue) OVER() AS OverallRevenue,
+CAST(SUM(Revenue) OVER() / SUM(NumberOfordersbycus) OVER() AS DECIMAL (12,2)) AS Overall_AOV
+FROM CTE_Customer_AOV
+)
+SELECT
+Customer_Name,
+Customer_AOV,
+Overall_AOV
+FROM CTE_Overall_AOV
+WHERE Customer_AOV > Overall_AOV
+ORDER BY Customer_AOV DESC;
+
+--Show the running total of Revenue for each Store by Year and Month.
+WITH CTE_RevenuebyStore AS
+(
+SELECT 
+S.store_Name,
+DATEPART(YEAR, O.order_date) SaleYear,
+DATEPART(MONTH, O.order_date) Month_number,
+DATENAME(MONTH, O.order_date) Month_Name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1 - OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.orders AS O
+JOIN dbo.order_items AS OI
+ON O.order_id = OI.order_id
+JOIN dbo.Stores AS S
+ON S.store_id = O.store_id
+GROUP BY
+S.store_Name,
+DATEPART(YEAR,O.order_date),
+DATEPART(MONTH, O.order_date),
+DATENAME(MONTH, O.order_date)
+)
+SELECT 
+Store_name,
+SaleYear,
+Month_Name,
+Revenue,
+SUM(Revenue) OVER(PARTITION BY Store_name ORDER BY Saleyear, Month_Number) RunningTotal
+FROM CTE_Revenuebystore;
+
+--Find the Top 3 Stores by Revenue Contribution (%) in each Year.
+WITH CTE_Revenuebystore AS
+(
+SELECT 
+S.store_name,
+DATEPART(YEAR, order_date) SaleYear,
+CAST(SUM((OI.Quantity * OI.list_price) * (1 - OI.discount)) AS DECIMAL (12,2)) Revenuebystore
+FROM dbo.orders AS O
+JOIN dbo.order_items AS OI
+ON O.order_id = OI.order_id
+JOIN dbo.stores AS S
+ON O.store_id = S.store_id
+GROUP BY 
+S.store_name,
+DATEPART(YEAR, order_date)
+),
+CTE_ContributionPercentage AS
+(
+SELECT
+Store_name,
+SaleYear,
+Revenuebystore,
+SUM(Revenuebystore) OVER(PARTITION BY SaleYear) OverallRevenue,
+CAST(Revenuebystore * 100 / SUM(Revenuebystore) OVER(PARTITION BY SaleYear) AS DECIMAL (12,2)) ContributionPercentage
+FROM CTE_RevenuebyStore
+),
+CTE_Ranking AS
+(
+SELECT 
+Store_name,
+SaleYear,
+Revenuebystore,
+OverallRevenue,
+ContributionPercentage,
+DENSE_RANK() OVER(PARTITION BY SaleYear ORDER BY ContributionPercentage DESC) Ranking
+FROM CTE_ContributionPercentage
+)
+SELECT 
+Store_name,
+SaleYear,
+Revenuebystore,
+OverallRevenue,
+ContributionPercentage
+FROM CTE_Ranking
+WHERE Ranking IN (1,2,3);
+
+--Calculate the Average Selling Price (ASP) for every Brand and compare it with the overall company ASP.
+WITH CTE_BrandASP AS
+(
+SELECT 
+B.brand_name,
+CAST(SUM((OI.quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) RevenueBybrand,
+SUM(OI.Quantity) AS TotalQuantitySold,
+CAST(SUM((OI.quantity * OI.list_price) * (1-OI.discount)) / SUM(OI.Quantity) AS DECIMAL (12,2)) ASPbyBrand
+FROM dbo.order_items AS OI
+JOIN dbo.products AS P
+ON OI.product_id = P.product_id
+JOIN dbo.brands AS B
+ON B.brand_id = P.brand_id
+GROUP BY 
+B.brand_name
+),
+CTE_OverallCompany_ASP AS
+(
+SELECT 
+Brand_name,
+ASPbyBrand,
+SUM(RevenueBybrand) OVER() OverallRevenue,
+SUM(TotalQuantitySold) OVER() Overallquantity,
+CAST(SUM(RevenueBybrand) OVER() / SUM(TotalQuantitySold) OVER() AS DECIMAL (12,2)) AS OverallCompanyASP
+FROM CTE_BrandASP 
+) 
+SELECT 
+Brand_name,
+ASPbyBrand,
+OverallCompanyASP,
+CAST(OverallCompanyASP - ASPbyBrand AS DECIMAL (12,2)) AS DifferenceinASP
+FROM CTE_OverallCompany_ASP;
+
+--Find repeat customers and calculate their Customer Lifetime Value (CLV).
+SELECT 
+O.customer_id,
+CONCAT(C.first_name,' ', C.last_name) Customer_name,
+COUNT(DISTINCT O.customer_id) NumberOforderPlaced,
+SUM(OI.Quantity) NumberOfproductPurchased,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenuebycustomers
+FROM dbo.orders AS O
+JOIN dbo.order_items AS OI
+ON O.Order_id = OI.order_id
+JOIN dbo.customers AS C
+ON O.customer_id = C.customer_id
+GROUP BY 
+O.customer_id,
+C.first_name,
+C.last_name
+HAVING COUNT(DISTINCT O.customer_id) > 1
+ORDER BY NumberOforderPlaced ASC;
+
+--Create a Customer Performance Dashboard showing Revenue, Orders, Units Purchased, AOV and CLV.
+SELECT
+C.customer_id,
+CONCAT(C.first_name,' ', C.last_name) Customer_name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1- OI.discount)) AS DECIMAL (12,2)) RevenueBycustomer,
+COUNT(DISTINCT OI.order_id) Numberoforders,
+SUM(OI.Quantity) UnitsPurchased,
+CAST(SUM((OI.Quantity * OI.list_price) * (1- OI.discount)) /COUNT(DISTINCT OI.order_id) AS DECIMAL (12,2)) AS Customer_AOV,
+MIN(O.Order_date) AS first_order,
+MAX(O.order_date) AS Last_order,
+DATEDIFF(DAY, MIN(O.Order_date), MAX(O.order_date)) Customerlifetimedays
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.customers AS C
+ON O.customer_id = C.customer_id
+GROUP BY
+C.customer_id,
+C.first_name,
+C.last_name;
+
+--Find customers with NULL phone numbers and replace them with 'Not Available'.
+SELECT
+Customer_id,
+CONCAT(first_name,' ',last_name) Customer_Name,
+CASE  
+    WHEN phone = 'NULL' THEN 'Not Available'
+    Else Phone
+End Phone
+FROM dbo.customers;
+
+--Find duplicate customer emails.
+WITH CTE_Duplicate_email AS
+(
+SELECT
+Customer_id,
+first_name,
+last_name,
+email,
+COUNT(*) OVER(PARTITION BY email) AS emailCount
+FROM dbo.customers
+)
+SELECT * FROM CTE_Duplicate_email WHERE emailcount > 1;
+
+--Find products with list price <= 0.
+SELECT 
+product_id,
+product_name,
+list_price
+FROM dbo.products
+WHERE list_price <= 0;
+
+--Find orders with future order dates.
+SELECT 
+Order_id,
+order_date,
+CAST(GETDATE() AS DATE) Currentdate
+FROM dbo.orders
+WHERE order_date > CAST(GETDATE() AS DATE);
+
+--Find customers with blank first or last names.
+SELECT 
+customer_id,
+first_name,
+last_name
+FROM dbo.customers
+WHERE
+first_name IS NULL OR last_name IS NULL
+OR TRIM(first_name) = '' OR TRIM(last_name) = '';
+
+--Find discounts outside the valid range (0 to 1).
+SELECT 
+discount
+FROM order_items
+WHERE discount < 0 OR discount > 1;
+
+--Find customers who never placed an order.
+SELECT 
+C.customer_id,
+O.order_id
+FROM dbo.customers AS C
+LEFT JOIN dbo.orders AS O
+ON C.customer_id = O.customer_id
+WHERE O.order_id IS NULL;
+
+--Find products that have never been ordered by customers from Texas
+SELECT 
+P.product_id,
+P.product_name,
+C.customer_id,
+CONCAT(C.first_name,' ', C.last_name) Customername,
+C.city
+FROM dbo.products AS P
+LEFT JOIN dbo.order_items AS OI
+ON P.product_id = OI.product_id
+LEFT JOIN dbo.orders AS O
+ON O.order_id = OI.order_id
+LEFT JOIN dbo.customers AS C
+ON C.customer_id = O.customer_id
+WHERE OI.product_id = P.product_id AND C.city = 'Texas';
+
+--Show Revenue, Orders, Units Sold and AOV for each Brand.
+SELECT 
+B.Brand_name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) RevenueByBrand,
+COUNT(DISTINCT OI.order_id) NumberOforders,
+SUM(OI.Quantity) TotalUnitssold,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) / COUNT(DISTINCT OI.order_id) AS DECIMAL (12,2)) AOV
+FROM dbo.order_items AS OI
+JOIN dbo.products AS P
+ON OI.product_id = P.product_id
+JOIN dbo.brands AS B
+ON B.brand_id = P.brand_id
+GROUP BY B.Brand_name;
+
+--Rank products within each brand by revenue.
+WITH CTE_Revenueby_Brand_Products AS
+(
+SELECT 
+B.brand_name,
+P.product_name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1 - OI.discount)) AS DECIMAL (12,2)) Revenue
+FROM dbo.order_items AS OI
+JOIN dbo.products AS P
+ON OI.Product_id = P.Product_id
+JOIN dbo.brands AS B
+ON P.brand_id = B.brand_id
+GROUP BY 
+B.brand_name,
+P.product_name
+)
+SELECT 
+Brand_name,
+Product_name,
+Revenue,
+DENSE_RANK() OVER(PARTITION BY Brand_name ORDER BY Revenue DESC) Ranking
+FROM CTE_Revenueby_Brand_Products;
+
+--Calculate running revenue by Brand and Month.
+WITH CTE_RevenueByBrand AS
+(
+SELECT
+B.Brand_name,
+DATEPART(YEAR, O.order_date) SaleYear,
+DATEPART(MONTH, O.Order_date) Month_Number,
+DATENAME(Month, O.order_date) Month_name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) RevenueByBrand
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.products AS P
+ON OI.product_id = P.product_id
+JOIN dbo.brands AS B
+ON P.Brand_id = B.brand_id
+GROUP BY 
+B.Brand_name,
+DATEPART(YEAR, O.order_date),
+DATEPART(MONTH, O.Order_date),
+DATENAME(Month, O.order_date)
+)
+SELECT 
+Brand_name,
+SaleYear,
+Month_name,
+RevenueByBrand,
+CAST(SUM(RevenueByBrand) OVER(PARTITION BY Brand_name, SaleYear ORDER BY Month_number ASC) AS DECIMAL (12,2)) RunningTotal
+FROM CTE_RevenueByBrand;
+
+--Find customers contributing to the first 80% of total revenue.
+WITH CTE_Revenuebycustomers AS
+(
+SELECT 
+CONCAT(C.first_name,' ',C.last_name) CustomerName,
+CAST(SUM((OI.Quantity * OI.list_Price) * (1 - OI.discount)) AS DECIMAL (12,2)) Revenuebycustomers
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.customers AS C
+ON O.customer_id = C.customer_id
+GROUP BY C.first_name, C.last_name
+),
+CTE_RunningRevenue AS
+(
+SELECT 
+CustomerName,
+Revenuebycustomers,
+SUM(Revenuebycustomers) OVER() OverallRevenue,
+CAST(SUM(Revenuebycustomers) OVER(ORDER BY Revenuebycustomers DESC) AS DECIMAL (12,2)) RunningRevenue
+FROM CTE_Revenuebycustomers
+)
+SELECT
+Customername,
+Revenuebycustomers,
+OverallRevenue,
+RunningRevenue,
+CAST(RunningRevenue * 100 / OverallRevenue AS DECIMAL (12,2)) AS RunningPercentage
+FROM CTE_RunningRevenue
+WHERE RunningRevenue * 100 / OverallRevenue <= 80
+ORDER BY Revenuebycustomers DESC;
+
+--Calculate repeat purchase rate by year.
+WITH CTE_CustomerOrders AS 
+(
+SELECT 
+O.customer_id,
+YEAR(Order_date) SaleYear,
+COUNT(O.order_id) Ordercount
+FROM dbo.orders AS O
+GROUP BY
+O.customer_id,
+YEAR(Order_date)
+),
+CTE_Repeat_Customers AS
+(
+SELECT 
+SaleYear,
+COUNT(Customer_id) TotalCustomers,
+COUNT(CASE WHEN Ordercount >1 THEN Customer_id END) AS repeatCustomers
+FROM CTE_CustomerOrders
+GROUP BY SaleYear
+)
+SELECT 
+SaleYear,
+Totalcustomers,
+repeatCustomers,
+repeatcustomers * 100 / Totalcustomers AS Repeatpurchaserate
+FROM CTE_Repeat_Customers
+ORDER BY Saleyear ASC;
+
+--Create a Product Performance Dashboard showing Revenue, Orders, Units, ASP and Revenue Contribution %.--
+WITH CTE_ProductKPI AS
+(
+SELECT 
+P.product_id,
+P.Product_name,
+CAST(SUM((OI.Quantity * OI.list_price)*(1 - OI.discount)) AS DECIMAL (12,2)) Revenue,
+COUNT(OI.order_id) Orders,
+SUM(OI.Quantity) Units,
+CAST(SUM((OI.Quantity * OI.list_price) * (1 - OI.discount)) / SUM(OI.Quantity) AS DECIMAL (12,2)) ASP
+FROM dbo.order_items AS OI
+JOIN dbo.products AS P
+ON OI.product_id = P.product_id
+GROUP BY 
+P.Product_id,
+P.Product_name
+)
+SELECT
+Product_id,
+Product_name,
+Revenue,
+orders,
+units,
+ASP,
+SUM(Revenue) OVER() OverallRevenue,
+CAST(Revenue * 100 / SUM(Revenue) OVER() AS DECIMAL (12,2)) AS RevenueContributionPercentage
+FROM CTE_ProductKPI;
+
+--Create a Brand Performance Dashboard showing Revenue, Orders, Units, Customers and Top Product.
+WITH CTE_BrandKPIs AS 
+(
+SELECT 
+B.Brand_id,
+B.brand_name,
+CAST(SUM((OI.Quantity * OI.list_price) * ( 1 - OI.discount)) AS DECIMAL (12,2)) RevenuebyBrand,
+COUNT(DISTINCT OI.order_id) Ordersbybrand,
+SUM(OI.Quantity) Unitssoldbybrand,
+COUNT(DISTINCT O.customer_id) CustomerCount
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.products AS P
+ON P.product_id = OI.product_id
+JOIN dbo.brands AS B
+ON P.brand_id = B.brand_id
+GROUP BY
+B.Brand_id,
+B.brand_name
+),
+CTE_ProductRevenue AS
+(
+SELECT 
+B.Brand_id,
+P.Product_id,
+P.Product_name,
+CAST(SUM((OI.Quantity * OI.list_price) * ( 1 - OI.discount)) AS DECIMAL (12,2)) Product_Revenue
+FROM dbo.order_items AS OI
+JOIN dbo.products AS P
+ON OI.product_id = P.product_id
+JOIN dbo.brands AS B
+ON P.brand_id = B.brand_id
+GROUP BY 
+B.Brand_id,
+P.Product_id,
+P.Product_name
+),
+CTE_Product_Ranking AS
+(
+SELECT 
+CBK.Brand_Name,
+CBK.RevenuebyBrand,
+CBK.ordersbybrand,
+CBK.Unitssoldbybrand,
+CBK.CustomerCount,
+CPR.Product_name,
+CPR.Product_Revenue,
+DENSE_Rank() OVER(PARTITION BY CBK.brand_name ORDER BY CPR.Product_Revenue DESC) Product_Ranking
+FROM CTE_BrandKPIs AS CBK
+JOIN CTE_ProductRevenue AS CPR
+ON CBK.Brand_id = CPR.Brand_id
+)
+SELECT 
+Brand_Name,
+RevenuebyBrand,
+ordersbybrand,
+Unitssoldbybrand,
+CustomerCount,
+Product_name,
+Product_Revenue
+FROM CTE_Product_Ranking
+WHERE Product_Ranking = 1;
+
+--Create a SQL View for Store Revenue and explain when a View is useful.
+CREATE VIEW View_Store_Revenue AS
+SELECT 
+S.store_id,
+S.store_name,
+SUM((OI.Quantity * OI.list_price) * (1 - OI.discount)) RevenuebyStores
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.stores AS S
+ON O.store_id = S.store_id
+GROUP BY 
+S.store_id,
+S.store_name
+
+--Build a Customer Performance Dashboard including Revenue, Orders, Units, AOV, CLV
+--and Customer Lifetime Days.
+SELECT
+C.customer_id,
+CONCAT(C.first_name,' ', C.last_name) Customer_name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenuebybrand,
+COUNT(DISTINCT OI.Order_id) Orders,
+SUM(OI.Quantity) Units,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) / COUNT(DISTINCT OI.Order_id) AS DECIMAL (12,2)) AOV,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) CLV,
+DATEDIFF(DAY, MIN(O.order_date), MAX(O.order_date)) Customerlifetimedays
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.customers AS C
+ON O.customer_id = C.customer_id
+GROUP BY
+C.customer_id,
+C.first_name,
+C.last_name;
+
+--Find products that were never sold.
+SELECT 
+P.Product_id,
+P.product_name,
+OI.order_id
+FROM dbo.Products AS P
+LEFT JOIN dbo.order_items AS OI
+ON P.product_id = OI.Product_id
+WHERE OI.order_id IS NULL
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
