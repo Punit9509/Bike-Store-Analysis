@@ -1,0 +1,66 @@
+--Create a Store Performance Dashboard showing Revenue, Orders, Units, AOV and Top Category.
+
+WITH CTE_StoreKPI AS
+(
+SELECT 
+S.Store_id,
+S.Store_name,
+CAST(SUM((OI.Quantity * OI.list_price) * ( 1 - OI.discount)) AS DECIMAL (12,2)) RevenuebyStore,
+COUNT(DISTINCT OI.order_id) Totalordersbystore,
+SUM(OI.Quantity) TotalunitsbyStore,
+CAST(SUM((OI.Quantity * OI.list_price) * ( 1 - OI.discount)) / COUNT(DISTINCT OI.order_id) AS DECIMAL (12,2)) AOVbystore
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O 
+ON OI.order_id = O.order_id
+JOIN dbo.stores AS S
+ON O.store_id = S.store_id
+GROUP BY 
+S.Store_id,
+S.Store_name
+),
+CTE_TopCategories AS
+(
+SELECT
+C.Category_id,
+S.Store_id,
+C.Category_name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) RevenuebyCategory
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.stores AS S
+ON O.store_id = S.store_id
+JOIN dbo.products AS P
+ON OI.product_id = P.product_id
+JOIN dbo.categories AS C
+ON P.category_id = C.category_id
+GROUP BY 
+C.Category_id,
+S.Store_id,
+C.Category_name
+),
+CTE_CategoryRanking AS
+(
+SELECT 
+CSK.Store_name,
+CSK.Revenuebystore,
+CSK.Totalordersbystore,
+CSK.Totalunitsbystore,
+CSK.AOVbystore,
+CTC.Category_name,
+CTC.RevenuebyCategory,
+DENSE_RANK() OVER(PARTITION BY CSK.Store_name ORDER BY CTC.RevenuebyCategory DESC) Category_Ranking
+FROM CTE_StoreKPI AS CSK
+JOIN CTE_TopCategories AS CTC
+ON CSK.Store_id = CTC.Store_id
+)
+SELECT 
+Store_name,
+Revenuebystore,
+Totalordersbystore,
+Totalunitsbystore,
+AOVbystore,
+Category_name,
+RevenuebyCategory
+FROM CTE_CategoryRanking
+WHERE Category_Ranking = 1
