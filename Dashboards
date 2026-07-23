@@ -63,4 +63,69 @@ AOVbystore,
 Category_name,
 RevenuebyCategory
 FROM CTE_CategoryRanking
-WHERE Category_Ranking = 1
+WHERE Category_Ranking = 1;
+
+--Build a Salesperson Performance Dashboard with Revenue, Orders, Customers and Best Selling Product.
+WITH CTE_RevenuebySalesperson AS
+(
+SELECT 
+S.Staff_id,
+CONCAT(S.first_name,' ', S.last_name) Staffname,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenuebysalesperson,
+COUNT(DISTINCT OI.Order_id) TotalOrders,
+COUNT(DISTINCT O.Customer_id) NumberOfcustomerhandledbysalesperson
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.staffs AS S
+ON O.staff_id = S.staff_id
+JOIN dbo.products AS P
+ON OI.product_id = P.product_id
+GROUP BY 
+S.Staff_id,
+S.first_name,
+S.last_name
+),
+CTE_ProductRevenue AS
+(
+SELECT 
+S.Staff_id,
+P.Product_id,
+P.Product_name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) Revenuebyproduct
+FROM dbo.order_items AS OI
+JOIN dbo.orders AS O
+ON OI.order_id = O.order_id
+JOIN dbo.products AS P
+ON OI.product_id = P.product_id
+JOIN dbo.staffs AS S
+ON O.staff_id = S.staff_id
+GROUP BY 
+P.Product_id,
+P.Product_name,
+S.staff_id
+),
+CTE_Product_Ranking AS
+(
+SELECT 
+CRS.Staffname,
+CRS.Revenuebysalesperson,
+CRS.TotalOrders,
+CRS.Numberofcustomerhandledbysalesperson,
+CPR.Product_name,
+CPR.Revenuebyproduct,
+DENSE_RANK() OVER(PARTITION BY CRS.Staff_id ORDER BY CPR.Revenuebyproduct DESC) Product_Ranking
+FROM CTE_RevenuebySalesperson AS CRS
+JOIN CTE_ProductRevenue AS CPR
+ON CRS.Staff_id = CPR.Staff_id
+)
+SELECT 
+Staffname AS SalespersonName,
+RevenueBysalesperson,
+TotalOrders,
+Numberofcustomerhandledbysalesperson,
+Product_name,
+Revenuebyproduct
+FROM CTE_Product_Ranking
+WHERE Product_Ranking = 1
+ORDER BY Revenuebyproduct DESC;
