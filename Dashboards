@@ -129,3 +129,34 @@ Revenuebyproduct
 FROM CTE_Product_Ranking
 WHERE Product_Ranking = 1
 ORDER BY Revenuebyproduct DESC;
+
+--Build a Category Performance Dashboard showing Revenue, Orders, Units, ASP and Revenue Contribution %.
+WITH CTE_Category AS
+(
+SELECT
+C.Category_id,
+C.Category_name,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) AS DECIMAL (12,2)) CategoryRevenue,
+COUNT(DISTINCT OI.order_id) NumberOforders,
+SUM(OI.Quantity) Totalunits,
+CAST(SUM((OI.Quantity * OI.list_price) * (1-OI.discount)) / SUM(OI.Quantity) AS DECIMAL (12,2)) ASP
+FROM dbo.order_items AS OI
+JOIN dbo.products AS P
+ON OI.product_id = P.product_id
+JOIN dbo.categories AS C
+ON P.Category_id = C.category_id
+GROUP BY 
+C.Category_id,
+C.Category_name
+)
+SELECT 
+Category_id,
+Category_Name,
+NumberOfOrders,
+Totalunits,
+ASP,
+CategoryRevenue,
+SUM(CategoryRevenue) OVER() OverallRevenue,
+CAST(CategoryRevenue * 100.0 / SUM(CategoryRevenue) OVER() AS DECIMAL (12,2)) AS RevenueContributionPercentage
+FROM CTE_Category
+ORDER BY CategoryRevenue DESC;
